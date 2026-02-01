@@ -73,18 +73,36 @@
     <h1>♠️ Blackjack Flask ♣️</h1>
 
     <div>
-        <h3>Dealer's Hand</h3>
-        <div>
-            {% for card in dealer_hand %}
-                <div class="card {% if card.suit in ['Hearts', 'Diamonds'] %}red{% else %}black{% endif %}">
-                    {{ card.rank }}
-                    <div class="suit-large">
-                        {% if card.suit == 'Hearts' %}♥{% elif card.suit == 'Diamonds' %}♦{% elif card.suit == 'Spades' %}♠{% else %}♣{% endif %}
-                    </div>
+    	<h3>Dealer's Hand</h3>
+<div class="cards">
+    {% for card in dealer_hand %}
+        
+        {% if loop.first and not game_over %}
+            
+            <div class="card hidden-card">
+                <div class="top-rank">?</div>
+                <div class="suit">?</div>
                 </div>
-            {% endfor %}
-        </div>
-    </div>
+            
+
+        {% else %}
+
+            <div class="card">
+                <div class="top-rank">{{ card.rank }}</div>
+                
+                <div class="suit" style="color: {{ 'red' if card.suit in ['Hearts', 'Diamonds'] else 'black' }}">
+                    
+                    {{ {'Hearts': '♥', 'Diamonds': '♦', 'Spades': '♠', 'Clubs': '♣'}[card.suit] }}
+                
+            </div>
+                
+            </div>
+
+        {% endif %}
+
+    {% endfor %}
+</div>
+            </div>
 
     {% if result %}
     <div class="result-message">
