@@ -77,6 +77,56 @@ def deal():
 
     return redirect(url_for('game_board'))
 
+
+@app.route("/stand")
+def stand():
+    #PART 1: RESTORE THE STATE
+    #Goal: Get the deck, player_hand, and dealer_hand from the session
+    deck_data = session.get('deck')
+    if deck_data is None:
+        return redirect(url_for('deal'))
+    player_data = session.get('player_hand')
+    dealer_data = session.get('dealer_hand')
+    
+    deck = Deck()
+    deck.cards = [Card(c['rank'], c['suit']) for c in deck_data]
+    player_hand = dict_to_hand(player_data)
+    dealer_hand = dict_to_hand(dealer_data)
+
+    
+
+    #PART 2: THE DEALER'S TURN
+    #Goal: A loop. While dealer's score is <17, draw a card.
+    while dealer_hand.get_value() < 17:
+        dealer_hand.add_card(deck.draw())
+    #PART 3: DETERMINE THE WINNER
+    #Goal: Compare scores.
+    #If Dealer > 21 -> Player Wins
+    #If Dealer > Player -> Dealer Wins
+    #If Player > Dealer -> Player Wins
+    #If Tier -> Push
+    player_score = player_hand.get_value()
+    dealer_score = dealer_hand.get_value()
+    if dealer_score > 21:
+        session['result'] = "Dealer busts, Player win!"
+        session['game_over'] = True
+    elif dealer_score > player_score:
+        session['result'] = "Dealer win"
+        session['game_over'] = True
+    elif dealer_score < player_score:
+        session['result'] = "Player wins"
+        session['game_over'] = True
+    else:
+        session['result'] = "It's a tie"
+        session['game_over'] = True
+
+    #PART 4. SAVE AND SHOW RESULTS
+    #Goal: Save the result to session and redirect to the game
+    session['deck'] = [{'rank':c.rank, 'suit':c.suit} for c in deck.cards]
+    session['dealer_hand'] = object_to_dict(dealer_hand) 
+    session['game_over'] = True
+
+    return redirect(url_for('game_board'))
 @app.route("/game")
 def game_board():
 
