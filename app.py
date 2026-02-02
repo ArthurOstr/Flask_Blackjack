@@ -1,9 +1,19 @@
+import os
 from flask import Flask, render_template, request, redirect, url_for, session
 from BJ_classes import Deck, Hand, Card
+from database import db, User
+from werkzeug.security import generate_password_hash,check_password_hash
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 app.secret_key= "Arthur_Is_The_King"
 
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db.init_app(app)
 # Helper functions
 def object_to_dict(hand_object):
     card_list = []
@@ -20,6 +30,44 @@ def dict_to_hand(card_list):
             recreated_card = Card(card_data['rank'], card_data['suit'])
             hand.add_card(recreated_card)
         return hand
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+
+        # Check if nickname is takem
+        if User.query.filter_by(username=username).first():
+            return "Nickname takem! Try another one."
+
+        # Hash and save password
+        hashed_pw = generate_password_hash(password)
+        new_user = User(username=username, password_hash=hashed_pw)
+
+        db.session.add(new_user)
+        db.session.commit()
+        return redirect(url_for('login'))
+
+    return render_template('register.html')
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+
+        user = User.query.filter_by(username=username).first()
+
+        if user and check_password_hash(user.password_hash, password):
+            session['user_id'] = user.id
+            session['username'] = user.username
+            return redirect(url_for('index'))
+
+        return "Invalid logdata"
+
+    return render_template('login.html')
 
 
 @app.route("/")
@@ -127,8 +175,20 @@ def stand():
     session['game_over'] = True
 
     return redirect(url_for('game_board'))
+
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+
 @app.route("/game")
 def game_board():
+
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+
 
     player_data = session.get('player_hand')
     dealer_data = session.get('dealer_hand')
@@ -140,6 +200,7 @@ def game_board():
     player_hand = dict_to_hand(player_data)
 
     return render_template('game.html',
+                           username=session.get('username'),
                            player_hand=player_hand.hand,
                            player_score=player_hand.get_value(),
                            dealer_hand=dealer_data,

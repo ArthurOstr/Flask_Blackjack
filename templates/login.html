@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Blackjack Login</title>
+    <style>
+        body { font-family: sans-serif; background: #2c3e50; color: white; text-align: center; padding-top: 50px; }
+        .login-box { background: #34495e; padding: 20px; border-radius: 10px; display: inline-block; }
+        input { display: block; margin: 10px auto; padding: 10px; width: 200px; border-radius: 5px; border: none; }
+        button { padding: 10px 20px; background: #27ae60; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        .error { color: #e74c3c; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+
+    <div class="login-box">
+        <h2>Login to Play</h2>
+
+        {% if error %}
+            <p class="error">{{ error }}</p>
+        {% endif %}
+
+        <form action="{{ url_for('login') }}" method="POST">
+            
+            <input type="text" name="username" placeholder="Username" required>
+            
+            <input type="password" name="password" placeholder="Password" required>
+            
+            <button type="submit">Enter the Casino</button>
+        </form>
+
+        <p>Don't have an account? <a href="{{ url_for('register') }}" style="color: #3498db;">Register here</a></p>
+    </div>
+
+</body>
+</html>

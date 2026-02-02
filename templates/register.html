@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Casino Registration</title>
+    <style>
+        body { font-family: sans-serif; background: #1a1a1a; color: #ecf0f1; text-align: center; padding-top: 50px; }
+        .box { background: #2c3e50; padding: 30px; border-radius: 15px; display: inline-block; border: 2px solid #27ae60; }
+        input { display: block; margin: 15px auto; padding: 12px; width: 250px; border-radius: 5px; border: none; font-size: 16px; }
+        button { padding: 12px 30px; background: #27ae60; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #2ecc71; }
+        a { color: #3498db; text-decoration: none; }
+    </style>
+</head>
+<body>
+
+    <div class="box">
+        <h1>Create Account</h1>
+        
+        <form action="{{ url_for('register') }}" method="POST">
+            
+            <input type="text" name="username" placeholder="Choose a Nickname" required>
+            
+            <input type="password" name="password" placeholder="Create Password" required>
+            
+            <button type="submit">Join Casino</button>
+        </form>
+
+        <p>Already a player? <a href="{{ url_for('login') }}">Login here</a></p>
+    </div>
+
+</body>
+</html>
