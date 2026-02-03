@@ -33,21 +33,24 @@ def dict_to_hand(card_list):
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
-    if request == 'POST':
+    if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
 
         # Check if nickname is takem
         if User.query.filter_by(username=username).first():
-            return "Nickname takem! Try another one."
+            return "Nickname take! Try another one."
 
         # Hash and save password
         hashed_pw = generate_password_hash(password)
-        new_user = User(username=username, password_hash=hashed_pw)
-
-        db.session.add(new_user)
-        db.session.commit()
-        return redirect(url_for('login'))
+        new_user = User(username=username, password_hash=hashed_pw, money=1000)
+        try:
+            db.session.add(new_user)
+            db.session.commit()
+            return redirect(url_for('login'))
+        except Exception as e:
+            db.session.rollback()
+            return f"Database Error: {e}"
 
     return render_template('register.html')
 
@@ -63,24 +66,31 @@ def login():
         if user and check_password_hash(user.password_hash, password):
             session['user_id'] = user.id
             session['username'] = user.username
-            return redirect(url_for('index'))
+            return redirect(url_for('home'))
 
-        return "Invalid logdata"
+        return "Invalid login data"
 
     return render_template('login.html')
 
 
 @app.route("/")
 def home():
-    return '<a href="/deal">Start Game</a>'
+    # User must be logged/
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    #fetch the current userdata
+    current_user = db.session.get(User, session['user_id'])
+    return render_template('home.html', user=current_user)
 
 
 @app.route("/hit")
 def hit():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
     # Load and deserialize deck to create object for the webpage
     deck_data = session.get('deck')
     if deck_data is None:
-        return redirect(url_for('deal' ))
+        return redirect(url_for('deal'))
     deck = Deck()
     deck.cards = [Card(c['rank'], c['suit']) for c in deck_data]
 
@@ -88,8 +98,7 @@ def hit():
     player_hand = dict_to_hand(session.get('player_hand'))
 
     # Draw the card from the changed deck
-    new_card = deck.draw()
-    player_hand.add_card(new_card)
+    player_hand.add_card(deck.draw())
 
     # Setting the strict logic
     if player_hand.get_value() > 21:
@@ -103,9 +112,21 @@ def hit():
     return redirect(url_for('game_board'))
 
 
-@app.route("/deal")
+@app.route("/deal", methods=['POST'])
 def deal():
-    # initialize the game objec
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    # Get the user and the bet
+    user = db.session.get(User, session['user_id'])
+    bet_amount = int(request.form.get('bet_amount'))
+    # Can the user afford bet?
+    if user.money < bet_amount:
+        return "You don't have enough money"
+    user.money -= bet_amount
+    db.session.commit()
+    # Save bet session
+    session['bet'] = bet_amount
+    # initialize the game object
     deck = Deck()
     player_hand = Hand()
     dealer_hand = Hand()
@@ -128,6 +149,8 @@ def deal():
 
 @app.route("/stand")
 def stand():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
     #PART 1: RESTORE THE STATE
     #Goal: Get the deck, player_hand, and dealer_hand from the session
     deck_data = session.get('deck')
@@ -140,9 +163,8 @@ def stand():
     deck.cards = [Card(c['rank'], c['suit']) for c in deck_data]
     player_hand = dict_to_hand(player_data)
     dealer_hand = dict_to_hand(dealer_data)
-
-    
-
+    user = db.session.get(User, session['user_id'])
+    bet = session.get('bet', 0)
     #PART 2: THE DEALER'S TURN
     #Goal: A loop. While dealer's score is <17, draw a card.
     while dealer_hand.get_value() < 17:
@@ -155,24 +177,26 @@ def stand():
     #If Tier -> Push
     player_score = player_hand.get_value()
     dealer_score = dealer_hand.get_value()
+    bet = session.get('bet', 0)
+    user = User.query.get(session['user_id'])
     if dealer_score > 21:
         session['result'] = "Dealer busts, Player win!"
-        session['game_over'] = True
+        user.money += bet * 2
     elif dealer_score > player_score:
         session['result'] = "Dealer win"
-        session['game_over'] = True
     elif dealer_score < player_score:
         session['result'] = "Player wins"
-        session['game_over'] = True
+        user.money += bet * 2
     else:
         session['result'] = "It's a tie"
-        session['game_over'] = True
+
+    db.session.commit()
+    session['game_over'] = True
 
     #PART 4. SAVE AND SHOW RESULTS
     #Goal: Save the result to session and redirect to the game
     session['deck'] = [{'rank':c.rank, 'suit':c.suit} for c in deck.cards]
     session['dealer_hand'] = object_to_dict(dealer_hand) 
-    session['game_over'] = True
 
     return redirect(url_for('game_board'))
 
@@ -188,24 +212,26 @@ def game_board():
 
     if 'user_id' not in session:
         return redirect(url_for('login'))
-
-
+    user = db.session.get(User, session['user_id'])
     player_data = session.get('player_hand')
     dealer_data = session.get('dealer_hand')
     result = session.get('result')
     game_over = session.get('game_over')
 
     if player_data is None:
-        return redirect(url_for('deal'))
+        return redirect(url_for('home'))
     player_hand = dict_to_hand(player_data)
+    dealer_hand = dict_to_hand(dealer_data)
 
     return render_template('game.html',
                            username=session.get('username'),
+                           user=user,
                            player_hand=player_hand.hand,
                            player_score=player_hand.get_value(),
                            dealer_hand=dealer_data,
-                           result=result,
-                           game_over=game_over)
+                           dealer_score=dealer_hand.get_value(),
+                           result=session.get('result'),
+                           game_over=session.get('game_over'))
 
 if __name__ == "__main__":
     app.run(debug=True)
