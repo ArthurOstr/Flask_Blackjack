@@ -1,4 +1,5 @@
 import os
+from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session
 from BJ_classes import Deck, Hand, Card
 from database import db, User
@@ -8,8 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key= "Arthur_Is_The_King"
-
+app.secret_key= os.environ.get('SECRET_KEY')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
@@ -30,6 +30,17 @@ def dict_to_hand(card_list):
             recreated_card = Card(card_data['rank'], card_data['suit'])
             hand.add_card(recreated_card)
         return hand
+
+# Decorator for login
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Guard logic
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -74,19 +85,16 @@ def login():
 
 
 @app.route("/")
+@login_required
 def home():
-    # User must be logged/
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
     #fetch the current userdata
     current_user = db.session.get(User, session['user_id'])
     return render_template('home.html', user=current_user)
 
 
 @app.route("/hit")
+@login_required
 def hit():
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
     # Load and deserialize deck to create object for the webpage
     deck_data = session.get('deck')
     if deck_data is None:
@@ -113,9 +121,8 @@ def hit():
 
 
 @app.route("/deal", methods=['POST'])
+@login_required
 def deal():
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
     # Get the user and the bet
     user = db.session.get(User, session['user_id'])
     bet_amount = int(request.form.get('bet_amount'))
@@ -148,11 +155,9 @@ def deal():
 
 
 @app.route("/stand")
+@login_required
 def stand():
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-    #PART 1: RESTORE THE STATE
-    #Goal: Get the deck, player_hand, and dealer_hand from the session
+    # RESTORE THE STATE
     deck_data = session.get('deck')
     if deck_data is None:
         return redirect(url_for('deal'))
@@ -165,16 +170,10 @@ def stand():
     dealer_hand = dict_to_hand(dealer_data)
     user = db.session.get(User, session['user_id'])
     bet = session.get('bet', 0)
-    #PART 2: THE DEALER'S TURN
-    #Goal: A loop. While dealer's score is <17, draw a card.
+    # THE DEALER'S TURN
     while dealer_hand.get_value() < 17:
         dealer_hand.add_card(deck.draw())
-    #PART 3: DETERMINE THE WINNER
-    #Goal: Compare scores.
-    #If Dealer > 21 -> Player Wins
-    #If Dealer > Player -> Dealer Wins
-    #If Player > Dealer -> Player Wins
-    #If Tier -> Push
+    # DETERMINE THE WINNER
     player_score = player_hand.get_value()
     dealer_score = dealer_hand.get_value()
     bet = session.get('bet', 0)
@@ -192,12 +191,9 @@ def stand():
 
     db.session.commit()
     session['game_over'] = True
-
-    #PART 4. SAVE AND SHOW RESULTS
-    #Goal: Save the result to session and redirect to the game
+    # SAVE AND SHOW RESULTS
     session['deck'] = [{'rank':c.rank, 'suit':c.suit} for c in deck.cards]
     session['dealer_hand'] = object_to_dict(dealer_hand) 
-
     return redirect(url_for('game_board'))
 
 
@@ -208,10 +204,8 @@ def logout():
 
 
 @app.route("/game")
+@login_required
 def game_board():
-
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
     user = db.session.get(User, session['user_id'])
     player_data = session.get('player_hand')
     dealer_data = session.get('dealer_hand')
