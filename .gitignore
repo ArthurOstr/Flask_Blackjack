@@ -1,0 +1,20 @@
+# --- Python / Flask ---
+.venv/
+__pycache__/
+*.pyc
+instance/
+.env
+
+# --- React / Node / Vite ---
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+*.local
+
+# --- OS / IDE ---
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+furniture.sql
