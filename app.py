@@ -2,7 +2,9 @@ import os
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from BJ_classes import Deck, Hand, Card
-from database import db, User
+from database import db, User, Game, init_db
+from sqlalchemy.orm.attributes import flag_modified
+import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 
@@ -16,6 +18,8 @@ if not app.config["SQLALCHEMY_DATABASE_URI"]:
     raise RuntimeError("DATABASE_URL is not set")
 
 db.init_app(app)
+with app.app_context():
+    init_db(app)
 
 
 # Helper functions
@@ -43,7 +47,7 @@ def login_required(f):
     def decorated_function(*args, **kwargs):
         # Guard logic
         if "user_id" not in session:
-            return redirect(url_for("login"))
+            return jsonify({"error": "Authentication requiered"}), 401
         return f(*args, **kwargs)
 
     return decorated_function
@@ -66,46 +70,45 @@ def get_profile():
     )
 
 
-@app.route("/register", methods=["GET", "POST"])
+@app.route("/register", methods=["POST"])
 def register():
-    if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
+    data = request.get_json(silent=True) or {}
+    username = data.get("username")
+    password = data.get("password")
 
-        # Check if nickname is takem
-        if User.query.filter_by(username=username).first():
-            return "Nickname take! Try another one."
+    if not username or not password:
+        return jsonify({"error": "Missing username or password"}), 400
 
-        # Hash and save password
-        hashed_pw = generate_password_hash(password)
-        new_user = User(username=username, password_hash=hashed_pw, money=1000)
-        try:
-            db.session.add(new_user)
-            db.session.commit()
-            return redirect(url_for("login"))
-        except Exception as e:
-            db.session.rollback()
-            return f"Database Error: {e}"
+    # Check if nickname is takem
+    if User.query.filter_by(username=username).first():
+        return (jsonify({"error": "Nickname taken! Try another one."}),)
 
-    return render_template("register.html")
+    # Hash and save password
+    hashed_pw = generate_password_hash(password)
+    new_user = User(username=username, password_hash=hashed_pw, money=1000)
+    try:
+        db.session.add(new_user)
+        db.session.commit()
+        return jsonify({"message": "User registered successful"})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"Error": str(e)}), 500
 
 
-@app.route("/login", methods=["GET", "POST"])
+@app.route("/login", methods=["POST"])
 def login():
-    if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
+    data = request.get_json()
+    username = data.get("username")
+    password = data.get("password")
 
-        user = User.query.filter_by(username=username).first()
+    user = User.query.filter_by(username=username).first()
 
-        if user and check_password_hash(user.password_hash, password):
-            session["user_id"] = user.id
-            session["username"] = user.username
-            return redirect(url_for("home"))
+    if user and check_password_hash(user.password_hash, password):
+        session["user_id"] = user.id
+        session["username"] = user.username
+        return jsonify({"message": "Login successful", "username": user.username})
 
-        return "Invalid login data"
-
-    return render_template("login.html")
+    return jsonify({"error": "Invalid credentials"}), 401
 
 
 @app.route("/")
@@ -116,39 +119,56 @@ def home():
     return render_template("home.html", user=current_user)
 
 
-@app.route("/api/hit")
+@app.route("/api/hit", methods=["POST"])
 @login_required
 def hit():
-    # Load and deserialize deck to create object for the webpage
-    deck_data = session.get("deck")
-    if deck_data is None:
-        return redirect(url_for("deal"))
-    deck = Deck()
-    deck.cards = [Card(c["rank"], c["suit"]) for c in deck_data]
+    data = request.get_json()
+    game_id = data.get("game_id")
+    # Fetch the data
+    game = db.session.get(Game, game_id)
 
-    # Changing Player's hand
-    player_hand = dict_to_hand(session.get("player_hand"))
+    # Security check
+    if not game:
+        return jsonify({"error": "Game not found"}), 404
+    if game.user_id != session["user_id"]:
+        return jsonify({"error": "Unauthorized"}), 403
+    if game.status != "active":
+        return jsonify({"error": "Game is over"}), 400
 
-    # Draw the card from the changed deck
-    player_hand.add_card(deck.draw())
+    deck_obj = Deck()
+    deck_obj.cards = [Card(c["rank"], c["suit"]) for c in game.deck]
 
-    score = player_hand.get_value()
-    game_over = False
-    result_message = None
+    player_hand_obj = dict_to_hand(game.player_hand)
 
-    # Setting the strict logic
+    # The action
+    new_card = deck_obj.draw()
+    player_hand_obj.add_card(new_card)
+    score = player_hand_obj.get_value()
+
+    # Updating the DB
+    game.player_hand = object_to_dict(player_hand_obj)
+    game.deck = [{"rank": c.rank, "suit": c.suit} for c in deck_obj.cards]
+
+    # Flag to make SQLAlchemy notice the JSON change
+    flag_modified(game, "player_hand")
+    flag_modified(game, "deck")
+
+    message = "Hit successful"
     if score > 21:
-        game_over = True
-        result_message = "Bust, you went over 21."
+        game.status = "dealer_win"
+        message = "Bust! You went over 21."
+        user = db.session.get(User, session["user_id"])
         user.losses += 1
-        db.session.commit()
+
+    db.session.commit()
 
     return jsonify(
         {
-            "hand": object_to_dict(player_hand),
+            "game_id": game.id,
+            "player_hand": game.player_hand,
             "score": score,
-            "game_over": game_over,
-            "result": result_message,
+            "status": game.status,
+            "message": message,
         }
     )
 
@@ -163,77 +183,106 @@ def deal():
     bet_amount = data.get("bet_amount", 10)
     # Can the user afford bet?
     if user.money < bet_amount:
-        return "You don't have enough money"
+        return jsonify({"Error": "You don't have enough money"}), 400
     user.money -= bet_amount
-    db.session.commit()
     # initialize the game object
     deck = Deck()
     player_hand = Hand()
     dealer_hand = Hand()
 
-    # deal 2 cards
-    player_hand.add_card(deck.draw())
-    player_hand.add_card(deck.draw())
+    # deal 2 cards for dealer and player
+    for _ in range(2):
+        player_hand.add_card(deck.draw())
+        dealer_hand.add_card(deck.draw())
 
-    dealer_hand.add_card(deck.draw())
-    dealer_hand.add_card(deck.draw())
-
-    session["deck"] = [{"rank": c.rank, "suit": c.suit} for c in deck.cards]
-    session["player_hand"] = object_to_dict(player_hand)
-    session["dealer_hand"] = object_to_dict(dealer_hand)
-
+    new_game = Game(
+        user_id=user.id,
+        player_hand=object_to_dict(player_hand),
+        dealer_hand=object_to_dict(dealer_hand),
+        deck=[{"rank": c.rank, "suit": c.suit} for c in deck.cards],
+        bet=bet_amount,
+        status="active",
+    )
+    db.session.add(new_game)
+    db.session.commit()
     return jsonify(
         {
-            "player_hand": session["player_hand"],
-            "dealer_hand": session["dealer_hand"],
-            "player_score": player_hand.get_value(),
+            "message": "Game started",
+            "game_id": new_game.id,
+            "player_hand": new_game.player_hand,
+            "dealer_card": new_game.dealer_hand[0],
             "user_money": user.money,
-            "game_over": False,
         }
     )
 
 
-@app.route("/stand")
+@app.route("/api/stand", methods=["POST"])
 @login_required
 def stand():
-    # RESTORE THE STATE
-    deck_data = session.get("deck")
-    if deck_data is None:
-        return redirect(url_for("deal"))
-    player_data = session.get("player_hand")
-    dealer_data = session.get("dealer_hand")
+    data = request.get_json()
+    game_id = data.get("game_id")
+    # Fetch the truth
+    game = db.session.get(Game, game_id)
+    if not game or game.user_id != session["user_id"] or game.status != "active":
+        return jsonify({"error": "Invalid game state"}), 400
 
-    deck = Deck()
-    deck.cards = [Card(c["rank"], c["suit"]) for c in deck_data]
-    player_hand = dict_to_hand(player_data)
-    dealer_hand = dict_to_hand(dealer_data)
-    user = db.session.get(User, session["user_id"])
-    bet = session.get("bet", 0)
-    # THE DEALER'S TURN
+    deck_obj = Deck()
+    deck_obj.cards = [Card(c["rank"], c["suit"]) for c in game.deck]
+    player_hand = dict_to_hand(game.player_hand)
+    dealer_hand = dict_to_hand(game.dealer_hand)
+
+    # The Dealer AI
     while dealer_hand.get_value() < 17:
-        dealer_hand.add_card(deck.draw())
-    # DETERMINE THE WINNER
+        new_card = deck_obj.draw()
+        dealer_hand.add_card(new_card)
+
+    # Determine winner
     player_score = player_hand.get_value()
     dealer_score = dealer_hand.get_value()
-    bet = session.get("bet", 0)
-    user = User.query.get(session["user_id"])
+    user = db.session.get(User, session["user_id"])
+
+    result_message = ""
+
     if dealer_score > 21:
-        session["result"] = "Dealer busts, Player win!"
+        game.status = "player_win"
+        result_message = "Dealer busts! You win"
+        user.wins += 1
         user.money += bet * 2
     elif dealer_score > player_score:
-        session["result"] = "Dealer win"
+        game.status = "dealer_win"
+        result_message = "Dealer win"
+        user.losses += 1
     elif dealer_score < player_score:
-        session["result"] = "Player wins"
+        game.status = "player_wins"
+        result_message = "Player wins"
+        user.wins += 1
         user.money += bet * 2
     else:
-        session["result"] = "It's a tie"
+        game.status = "push"
+        result_message = "It's a tie"
+        user.money += game.bet
+
+    # Persistence
+    game.dealer_hand = object_to_dict(dealer_hand)
+    game.deck = [{"rank": c.rank, "suit": c.suit} for c in deck_obj.cards]
+
+    # Force updates for JSON fields
+    flag_modified(game, "dealer_hand")
+    flag_modified(game, "deck")
 
     db.session.commit()
-    session["game_over"] = True
-    # SAVE AND SHOW RESULTS
-    session["deck"] = [{"rank": c.rank, "suit": c.suit} for c in deck.cards]
-    session["dealer_hand"] = object_to_dict(dealer_hand)
-    return redirect(url_for("game_board"))
+
+    return jsonify(
+        {
+            "game_id": game.id,
+            "status": game.status,
+            "dealer_hand": game.dealer_hand,
+            "dealer_score": dealer_score,
+            "player_score": player_score,
+            "user_money": user.money,
+            "message": result_message,
+        }
+    )
 
 
 @app.route("/logout")
